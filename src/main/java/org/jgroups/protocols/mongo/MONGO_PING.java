@@ -41,17 +41,18 @@ import org.jgroups.util.Util;
  */
 public class MONGO_PING extends JDBC_PING2 {
 
-    static {
-        // TODO - this is an external protocol not currently registered in jg-protocol-ids.xml
-        // TODO what magic ID to use now?
-        ClassConfigurator.addProtocol((short) 780, MONGO_PING.class);
-    }
-
     // Constants
+    protected static final short MONGO_PING_DEFAULT_PROTOCOL_ID = 531;
     private static final String CLUSTERNAME_KEY = "clustername";
     private static final String NAME_KEY = "name";
     private static final String IP_KEY = "ip";
     private static final String ISCOORD_KEY = "isCoord";
+
+    static {
+        short protocolId = ClassConfigurator.getProtocolId(MONGO_PING.class);
+        // Since JGroups 5.5.3 we can use ClassConfigurator.getProtocolId which manages the ID; until then we need to provide an ID ourselves
+        ClassConfigurator.addProtocol(protocolId != 0 ? protocolId : MONGO_PING_DEFAULT_PROTOCOL_ID, MONGO_PING.class);
+    }
 
     @Property(description = "Name of the MongoDB collection used to store cluster member information")
     protected String collection_name = "jgroups-ping";
