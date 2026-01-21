@@ -30,23 +30,20 @@ This library implements a JGroups discovery protocol which replaces protocols su
 />
 ----
 
-// === Configurations Properties
-//
-// [align="left",cols="3,1,10",options="header"]
-// |===
-// | Attribute Name +
-// System Property +
-// Environment variable
-// | Default
-// | Description
-//
-// | `TODO` +
-// System property: `TODO` +
-// Environment variable: `TODO`
-// | *todo*
-// | TODO
-//
-// |===
+=== Configuration Properties
+
+This protocol extends `JDBC_PING2` and inherits its configuration properties (e.g., `connection_url`, `remove_all_data_on_view_change`, `register_shutdown_hook`).
+
+The following properties are specific to `MONGO_PING`:
+
+[cols="2,1,4",options="header"]
+|===
+| Attribute | Default | Description
+
+| `collection_name`
+| `jgroups-ping`
+| Name of the MongoDB collection used to store cluster member information
+|===
 
 === Example Stack
 
