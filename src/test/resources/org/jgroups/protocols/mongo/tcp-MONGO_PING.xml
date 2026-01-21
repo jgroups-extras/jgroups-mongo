@@ -1,38 +1,18 @@
 <!--
-  ~ Copyright 2025 Red Hat Inc., and individual contributors
-  ~
-  ~ Licensed under the Apache License, Version 2.0 (the "License");
-  ~ you may not use this file except in compliance with the License.
-  ~ You may obtain a copy of the License at
-  ~
-  ~ http://www.apache.org/licenses/LICENSE-2.0
-  ~
-  ~ Unless required by applicable law or agreed to in writing, software
-  ~ distributed under the License is distributed on an "AS IS" BASIS,
-  ~ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-  ~ See the License for the specific language governing permissions and
-  ~ limitations under the License.
-  -->
-
-<!--
-  Formatted copy of the original jgroups-5.5.0.Final.jar!/tcp.xml reconfigured to use S3_PING.
--->
-
-<!--
-    TCP based stack, with flow control and message bundling. This is usually used when IP
-    multicasting cannot be used in a network, e.g. because it is disabled (routers discard multicast).
-    Note that TCP.bind_addr and TCPPING.initial_hosts should be set, possibly via system properties, e.g.
-    -Djgroups.bind_addr=192.168.5.2 and -Djgroups.tcpping.initial_hosts=192.168.5.2[7800]
-    author: Bela Ban
+  Formatted copy of the original jgroups-5.5.0.Final.jar!/tcp.xml reconfigured to use mongo.MONGO_PING.
 -->
 <config xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
         xmlns="urn:org:jgroups"
         xsi:schemaLocation="urn:org:jgroups http://www.jgroups.org/schema/jgroups-5.5.xsd">
     <include file="${transport-config:tcp-default.xml}"/>
     <!-- Uncomment attributes 'insert_sp' and 'call_insert_sp' if you want to use stored procedures -->
+    <!-- Disable shutdown hook in tests to prevent hang:
+         The shutdown hook tries to clean up MongoDB data during JVM shutdown,
+         but by that point the Testcontainers MongoDB instance is already stopped,
+         causing Surefire to hang and eventually kill the forked JVM. -->
     <mongo.MONGO_PING connection_url="${jgroups.mongo.connection_url:mongodb://localhost:27017/test}"
                       remove_all_data_on_view_change="true"
-                      register_shutdown_hook="true"
+                      register_shutdown_hook="false"
                       return_entire_cache="false"
     />
     <MERGE3 min_interval="10s"
