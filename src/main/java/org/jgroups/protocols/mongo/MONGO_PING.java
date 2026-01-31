@@ -3,6 +3,7 @@ package org.jgroups.protocols.mongo;
 import static com.mongodb.client.model.Filters.and;
 import static com.mongodb.client.model.Filters.eq;
 
+import java.sql.Connection;
 import java.util.LinkedList;
 import java.util.List;
 
@@ -15,7 +16,6 @@ import com.mongodb.client.MongoCollection;
 import org.bson.Document;
 import org.jgroups.Address;
 import org.jgroups.PhysicalAddress;
-import org.jgroups.View;
 import org.jgroups.annotations.Property;
 import org.jgroups.conf.ClassConfigurator;
 import org.jgroups.protocols.JDBC_PING2;
@@ -118,29 +118,18 @@ public class MONGO_PING extends JDBC_PING2 {
     }
 
     @Override
-    protected void removeAllNotInCurrentView() {
-        View local_view = view;
-        if (local_view == null) {
-            return;
-        }
-        try {
-            String cluster_name = getClusterName();
-            List<PingData> list = readAll(cluster_name);
-            for (PingData data : list) {
-                Address addr = data.getAddress();
-                if (!local_view.containsMember(addr)) {
-                    addDiscoveryResponseToCaches(addr, data.getLogicalName(), data.getPhysicalAddr());
-                    doDelete(cluster_name, addr);
-                }
-            }
-        } catch (Exception e) {
-            log.error(String.format("%s: failed reading from the DB", local_addr), e);
-        }
-    }
-
-    @Override
     protected void clearTable(String clustername) {
         getCollection().deleteMany(eq(CLUSTERNAME_KEY, clustername));
+    }
+
+    /**
+     * Returns null as MongoDB does not use JDBC connections. The parent class methods that receive
+     * a Connection parameter (e.g., {@link #delete(Connection, String, Address)}) are overridden
+     * to ignore it and use the cached {@link MongoCollection} instead.
+     */
+    @Override
+    protected Connection getConnection() {
+        return null;
     }
 
     @Override
@@ -208,16 +197,15 @@ public class MONGO_PING extends JDBC_PING2 {
         return readAll(cluster);
     }
 
-    /**
-     * Deletes a single entry from the collection.
-     */
-    private void doDelete(String clustername, Address addressToDelete) {
-        String address = Util.addressToString(addressToDelete);
-        getCollection().deleteOne(and(eq("_id", address), eq(CLUSTERNAME_KEY, clustername)));
+    @Override
+    protected void delete(Connection conn, String clustername, Address addressToDelete) {
+        // Ignore conn - its null anyway
+        this.delete(clustername, addressToDelete);
     }
 
     @Override
     protected void delete(String clustername, Address addressToDelete) {
-        doDelete(clustername, addressToDelete);
+        String address = Util.addressToString(addressToDelete);
+        getCollection().deleteOne(and(eq("_id", address), eq(CLUSTERNAME_KEY, clustername)));
     }
 }
