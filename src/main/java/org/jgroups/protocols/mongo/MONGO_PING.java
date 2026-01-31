@@ -143,19 +143,14 @@ public class MONGO_PING extends JDBC_PING2 {
     protected void writeToDB(PingData data, String clustername) {
         lock.lock();
         try {
-            delete(clustername, data.getAddress());
-            insert(data, clustername);
-        } finally {
-            lock.unlock();
-        }
-    }
-
-    protected void insert(PingData data, String clustername) {
-        lock.lock();
-        try {
             var collection = getCollection(getMongoClient());
             Address address = data.getAddress();
             String addr = Util.addressToString(address);
+
+            // Delete existing entry
+            collection.deleteOne(and(eq("_id", addr), eq(CLUSTERNAME_KEY, clustername)));
+
+            // Insert new entry
             String name = address instanceof SiteUUID ? ((SiteUUID) address).getName() : NameCache.get(address);
             PhysicalAddress ip_addr = data.getPhysicalAddr();
             String ip = ip_addr.toString();
