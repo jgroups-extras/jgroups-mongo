@@ -9,6 +9,7 @@ import java.util.List;
 import com.mongodb.ConnectionString;
 import com.mongodb.MongoCommandException;
 import com.mongodb.client.MongoClient;
+import com.mongodb.client.model.ReplaceOptions;
 import com.mongodb.client.MongoClients;
 import com.mongodb.client.MongoCollection;
 import org.bson.Document;
@@ -144,20 +145,17 @@ public class MONGO_PING extends JDBC_PING2 {
         var collection = getCollection(getMongoClient());
         Address address = data.getAddress();
         String addr = Util.addressToString(address);
-
-        // Delete existing entry
-        collection.deleteOne(and(eq("_id", addr), eq(CLUSTERNAME_KEY, clustername)));
-
-        // Insert new entry
         String name = address instanceof SiteUUID ? ((SiteUUID) address).getName() : NameCache.get(address);
         PhysicalAddress ip_addr = data.getPhysicalAddr();
         String ip = ip_addr.toString();
-        collection.insertOne(new Document("_id", addr)
+
+        var filter = and(eq("_id", addr), eq(CLUSTERNAME_KEY, clustername));
+        var document = new Document("_id", addr)
                 .append(NAME_KEY, name)
                 .append(CLUSTERNAME_KEY, clustername)
                 .append(IP_KEY, ip)
-                .append(ISCOORD_KEY, data.isCoord())
-        );
+                .append(ISCOORD_KEY, data.isCoord());
+        collection.replaceOne(filter, document, new ReplaceOptions().upsert(true));
     }
 
     @Override
