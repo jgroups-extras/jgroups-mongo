@@ -198,7 +198,7 @@ public class MONGO_PING extends JDBC_PING2 {
                 String name = doc.get(NAME_KEY, String.class);
                 String ip = doc.get(IP_KEY, String.class);
                 IpAddress ip_addr = new IpAddress(ip);
-                boolean coord = doc.get(ISCOORD_KEY, Boolean.class);
+                boolean coord = Boolean.TRUE.equals(doc.get(ISCOORD_KEY, Boolean.class));
                 PingData data = new PingData(addr, true, name, ip_addr).coord(coord);
                 retval.add(data);
             }
