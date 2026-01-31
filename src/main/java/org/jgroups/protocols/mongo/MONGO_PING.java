@@ -59,29 +59,7 @@ public class MONGO_PING extends JDBC_PING2 {
     @Property(description = "Name of the MongoDB collection used to store cluster member information")
     protected String collection_name = "jgroups-ping";
 
-    private MongoClient mongoClient;
-    private ConnectionString connectionString;
-
-    @Override
-    public void init() throws Exception {
-        connectionString = new ConnectionString(connection_url);
-        if (connectionString.getDatabase() == null) {
-            throw new IllegalStateException("Database name must be specified in connection_url");
-        }
-        mongoClient = MongoClients.create(connectionString);
-        super.init();
-    }
-
-    @Override
-    public void stop() {
-        // Superclass stop() uses the client for remove()
-        super.stop();
-
-        if (mongoClient != null) {
-            mongoClient.close();
-            mongoClient = null;
-        }
-    }
+    // Builder-like methods and method overrides
 
     @Override
     public MONGO_PING setConnectionUrl(String connectionUrl) {
@@ -98,13 +76,45 @@ public class MONGO_PING extends JDBC_PING2 {
         return this;
     }
 
-    protected MongoClient getMongoClient() {
-        return mongoClient;
+    private MongoClient mongoClient;
+    private MongoCollection<Document> collection;
+
+    @Override
+    public void init() throws Exception {
+        var connectionString = new ConnectionString(connection_url);
+        if (connectionString.getDatabase() == null) {
+            throw new IllegalStateException("Database name must be specified in connection_url");
+        }
+        mongoClient = MongoClients.create(connectionString);
+        collection = mongoClient.getDatabase(connectionString.getDatabase()).getCollection(collection_name);
+        super.init();
     }
 
-    protected MongoCollection<Document> getCollection(MongoClient client) {
-        assert connectionString.getDatabase() != null; // Cannot be null - validated in MONGO_PING.init()
-        return client.getDatabase(connectionString.getDatabase()).getCollection(collection_name);
+    protected MongoCollection<Document> getCollection() {
+        return this.collection;
+    }
+
+    @Override
+    public void stop() {
+        // Postpone closing the client post JDBC_PING2.stop() which uses the client for remove()
+        super.stop();
+
+        if (mongoClient != null) {
+            mongoClient.close();
+            mongoClient = null;
+        }
+    }
+
+    // No-op overrides otherwise inherited and called from JDBC_PING2.init()
+
+    @Override
+    protected void loadDriver() {
+        // No-op.
+    }
+
+    @Override
+    protected void createInsertStoredProcedure() {
+        // No-op.
     }
 
     @Override
@@ -115,13 +125,12 @@ public class MONGO_PING extends JDBC_PING2 {
         }
         try {
             String cluster_name = getClusterName();
-            var collection = getCollection(getMongoClient());
-            List<PingData> list = readAll(collection, getClusterName());
+            List<PingData> list = readAll(cluster_name);
             for (PingData data : list) {
                 Address addr = data.getAddress();
                 if (!local_view.containsMember(addr)) {
                     addDiscoveryResponseToCaches(addr, data.getLogicalName(), data.getPhysicalAddr());
-                    doDelete(collection, cluster_name, addr);
+                    doDelete(cluster_name, addr);
                 }
             }
         } catch (Exception e) {
@@ -130,19 +139,12 @@ public class MONGO_PING extends JDBC_PING2 {
     }
 
     @Override
-    protected void loadDriver() {
-        //do nothing
-    }
-
-    @Override
     protected void clearTable(String clustername) {
-        var collection = getCollection(getMongoClient());
-        collection.deleteMany(eq(CLUSTERNAME_KEY, clustername));
+        getCollection().deleteMany(eq(CLUSTERNAME_KEY, clustername));
     }
 
     @Override
     protected void writeToDB(PingData data, String clustername) {
-        var collection = getCollection(getMongoClient());
         Address address = data.getAddress();
         String addr = Util.addressToString(address);
         String name = address instanceof SiteUUID ? ((SiteUUID) address).getName() : NameCache.get(address);
@@ -155,13 +157,13 @@ public class MONGO_PING extends JDBC_PING2 {
                 .append(CLUSTERNAME_KEY, clustername)
                 .append(IP_KEY, ip)
                 .append(ISCOORD_KEY, data.isCoord());
-        collection.replaceOne(filter, document, new ReplaceOptions().upsert(true));
+        getCollection().replaceOne(filter, document, new ReplaceOptions().upsert(true));
     }
 
     @Override
     protected void createSchema() {
         try {
-            var db = mongoClient.getDatabase(connectionString.getDatabase());
+            var db = mongoClient.getDatabase(collection.getNamespace().getDatabaseName());
             db.createCollection(collection_name);
         } catch (MongoCommandException mex) {
             // Ignore "collection already exists" error (code 48)
@@ -171,16 +173,11 @@ public class MONGO_PING extends JDBC_PING2 {
         }
     }
 
-    @Override
-    protected void createInsertStoredProcedure() {
-        //do nothing
-    }
-
     /**
      * Reads all ping data from the collection for the given cluster.
      */
-    private List<PingData> readAll(MongoCollection<Document> collection, String cluster) throws Exception {
-        try (var iterator = collection.find(eq(CLUSTERNAME_KEY, cluster)).iterator()) {
+    private List<PingData> readAll(String cluster) throws Exception {
+        try (var iterator = getCollection().find(eq(CLUSTERNAME_KEY, cluster)).iterator()) {
             // Lock only for the shared counter; MongoClient is thread-safe
             lock.lock();
             try {
@@ -208,21 +205,19 @@ public class MONGO_PING extends JDBC_PING2 {
 
     @Override
     protected List<PingData> readFromDB(String cluster) throws Exception {
-        var collection = getCollection(getMongoClient());
-        return readAll(collection, cluster);
+        return readAll(cluster);
     }
 
     /**
-     * Deletes a single entry from the collection. Does not acquire lock.
+     * Deletes a single entry from the collection.
      */
-    private void doDelete(MongoCollection<Document> collection, String clustername, Address addressToDelete) {
-        String addr = Util.addressToString(addressToDelete);
-        collection.deleteOne(and(eq("_id", addr), eq(CLUSTERNAME_KEY, clustername)));
+    private void doDelete(String clustername, Address addressToDelete) {
+        String address = Util.addressToString(addressToDelete);
+        getCollection().deleteOne(and(eq("_id", address), eq(CLUSTERNAME_KEY, clustername)));
     }
 
     @Override
     protected void delete(String clustername, Address addressToDelete) {
-        var collection = getCollection(getMongoClient());
-        doDelete(collection, clustername, addressToDelete);
+        doDelete(clustername, addressToDelete);
     }
 }
