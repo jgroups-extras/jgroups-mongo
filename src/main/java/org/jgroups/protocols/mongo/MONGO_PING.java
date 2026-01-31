@@ -56,7 +56,7 @@ public class MONGO_PING extends JDBC_PING2 {
         ClassConfigurator.addProtocol(protocolId != 0 ? protocolId : MONGO_PING_DEFAULT_PROTOCOL_ID, MONGO_PING.class);
     }
 
-    @Property(description = "Name of the MongoDB collection used to store cluster member information")
+    @Property(description = "Name of the MongoDB collection used to store cluster member information", writable = false)
     protected String collection_name = "jgroups-ping";
 
     // Builder-like methods and method overrides
