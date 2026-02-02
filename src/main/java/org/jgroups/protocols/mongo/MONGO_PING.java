@@ -3,17 +3,19 @@ package org.jgroups.protocols.mongo;
 import static com.mongodb.client.model.Filters.and;
 import static com.mongodb.client.model.Filters.eq;
 
+import java.sql.Connection;
 import java.util.LinkedList;
 import java.util.List;
 
 import com.mongodb.ConnectionString;
+import com.mongodb.MongoCommandException;
 import com.mongodb.client.MongoClient;
+import com.mongodb.client.model.ReplaceOptions;
 import com.mongodb.client.MongoClients;
 import com.mongodb.client.MongoCollection;
 import org.bson.Document;
 import org.jgroups.Address;
 import org.jgroups.PhysicalAddress;
-import org.jgroups.View;
 import org.jgroups.annotations.Property;
 import org.jgroups.conf.ClassConfigurator;
 import org.jgroups.protocols.JDBC_PING2;
@@ -54,8 +56,10 @@ public class MONGO_PING extends JDBC_PING2 {
         ClassConfigurator.addProtocol(protocolId != 0 ? protocolId : MONGO_PING_DEFAULT_PROTOCOL_ID, MONGO_PING.class);
     }
 
-    @Property(description = "Name of the MongoDB collection used to store cluster member information")
+    @Property(description = "Name of the MongoDB collection used to store cluster member discovery information. Defaults to 'jgroups-ping' collection.", writable = false)
     protected String collection_name = "jgroups-ping";
+
+    // Builder-like methods and method overrides
 
     @Override
     public MONGO_PING setConnectionUrl(String connectionUrl) {
@@ -72,117 +76,114 @@ public class MONGO_PING extends JDBC_PING2 {
         return this;
     }
 
-    protected MongoClient getMongoConnection() {
-        return MongoClients.create(connectionString);
-    }
-
-    protected MongoCollection<Document> getCollection(MongoClient client) {
-        var connString = new ConnectionString(connection_url);
-        assert connString.getDatabase() != null;
-        var db = client.getDatabase(connString.getDatabase());
-        return db.getCollection(collection_name);
-    }
-
-    protected ConnectionString connectionString;
+    private MongoClient mongoClient;
+    private MongoCollection<Document> collection;
 
     @Override
-    protected void removeAllNotInCurrentView() {
-        View local_view = view;
-        if (local_view == null) {
-            return;
+    public void init() throws Exception {
+        var connectionString = new ConnectionString(connection_url);
+        if (connectionString.getDatabase() == null) {
+            throw new IllegalStateException("Database name must be specified in connection_url");
         }
-        String cluster_name = getClusterName();
-        try (var mongoClient = getMongoConnection()) {
-            var collection = getCollection(mongoClient);
-            try {
-                List<PingData> list = readFromDB(mongoClient, getClusterName());
-                for (PingData data : list) {
-                    Address addr = data.getAddress();
-                    if (!local_view.containsMember(addr)) {
-                        addDiscoveryResponseToCaches(addr, data.getLogicalName(), data.getPhysicalAddr());
-                        delete(collection, cluster_name, addr);
-                    }
-                }
-            } catch (Exception e) {
-                log.error(String.format("%s: failed reading from the DB", local_addr), e);
+        mongoClient = MongoClients.create(connectionString);
+        collection = mongoClient.getDatabase(connectionString.getDatabase()).getCollection(collection_name);
+        super.init();
+    }
+
+    protected MongoCollection<Document> getCollection() {
+        return this.collection;
+    }
+
+    @Override
+    public void stop() {
+        // Postpone closing the client post JDBC_PING2.stop() which uses the client for remove()
+        super.stop();
+
+        if (mongoClient != null) {
+            mongoClient.close();
+            mongoClient = null;
+        }
+    }
+
+    // No-op overrides otherwise inherited and called from JDBC_PING2.init()
+
+    @Override
+    protected void loadDriver() {
+        // No-op.
+    }
+
+    @Override
+    protected void createInsertStoredProcedure() {
+        // No-op.
+    }
+
+    @Override
+    protected void clearTable(String clustername) {
+        getCollection().deleteMany(eq(CLUSTERNAME_KEY, clustername));
+    }
+
+    /**
+     * Returns null as MongoDB does not use JDBC connections. The parent class methods that receive
+     * a Connection parameter (e.g., {@link #delete(Connection, String, Address)}) are overridden
+     * to ignore it and use the cached {@link MongoCollection} instead.
+     */
+    @Override
+    protected Connection getConnection() {
+        return null;
+    }
+
+    @Override
+    protected void writeToDB(PingData data, String clustername) {
+        Address address = data.getAddress();
+        String addr = Util.addressToString(address);
+        String name = address instanceof SiteUUID ? ((SiteUUID) address).getName() : NameCache.get(address);
+        PhysicalAddress ip_addr = data.getPhysicalAddr();
+        String ip = ip_addr.toString();
+
+        var filter = and(eq("_id", addr), eq(CLUSTERNAME_KEY, clustername));
+        var document = new Document("_id", addr)
+                .append(NAME_KEY, name)
+                .append(CLUSTERNAME_KEY, clustername)
+                .append(IP_KEY, ip)
+                .append(ISCOORD_KEY, data.isCoord());
+        getCollection().replaceOne(filter, document, new ReplaceOptions().upsert(true));
+    }
+
+    @Override
+    protected void createSchema() {
+        try {
+            var db = mongoClient.getDatabase(collection.getNamespace().getDatabaseName());
+            db.createCollection(collection_name);
+        } catch (MongoCommandException mex) {
+            // Ignore "collection already exists" error (code 48)
+            if (mex.getErrorCode() != 48) {
+                throw mex;
             }
         }
     }
 
     @Override
-    protected void loadDriver() {
-        //do nothing
-    }
-
-    @Override
-    protected void clearTable(String clustername) {
-        try (var mongoClient = getMongoConnection()) {
-            var collection = getCollection(mongoClient);
-            collection.deleteMany(eq(CLUSTERNAME_KEY, clustername));
-        }
-    }
-
-    @Override
-    protected void writeToDB(PingData data, String clustername) {
-        lock.lock();
-        try {
-            delete(clustername, data.getAddress());
-            insert(data, clustername);
-        } finally {
-            lock.unlock();
-        }
-    }
-
-    protected void insert(PingData data, String clustername) {
-        lock.lock();
-        try (var mongoClient = getMongoConnection()) {
-            var collection = getCollection(mongoClient);
-            Address address = data.getAddress();
-            String addr = Util.addressToString(address);
-            String name = address instanceof SiteUUID ? ((SiteUUID) address).getName() : NameCache.get(address);
-            PhysicalAddress ip_addr = data.getPhysicalAddr();
-            String ip = ip_addr.toString();
-            collection.insertOne(new Document("_id", addr)
-                    .append(NAME_KEY, name)
-                    .append(CLUSTERNAME_KEY, clustername)
-                    .append(IP_KEY, ip)
-                    .append(ISCOORD_KEY, data.isCoord())
-            );
-        } finally {
-            lock.unlock();
-        }
-    }
-
-    @Override
-    protected void createSchema() {
-        connectionString = new ConnectionString(connection_url);
-        try (var mongoClient = getMongoConnection()) {
-            var db = mongoClient.getDatabase(connectionString.getDatabase());
-            db.createCollection(collection_name);
-        }
-    }
-
-    @Override
-    protected void createInsertStoredProcedure() {
-        //do nothing
-    }
-
-    protected List<PingData> readFromDB(MongoClient mongoClient, String cluster) throws Exception {
-        var collection = getCollection(mongoClient);
-        try (var iterator = collection.find(eq(CLUSTERNAME_KEY, cluster)).iterator()) {
-            reads++;
+    protected List<PingData> readFromDB(String cluster) throws Exception {
+        try (var iterator = getCollection().find(eq(CLUSTERNAME_KEY, cluster)).iterator()) {
+            // Lock only for the shared counter to work around its non-volatility
+            lock.lock();
+            try {
+                reads++;
+            } finally {
+                lock.unlock();
+            }
             List<PingData> retval = new LinkedList<>();
 
             while (iterator.hasNext()) {
                 var doc = iterator.next();
                 String uuid = doc.get("_id", String.class);
-                Address addr = Util.addressFromString(uuid);
+                Address address = Util.addressFromString(uuid);
                 String name = doc.get(NAME_KEY, String.class);
                 String ip = doc.get(IP_KEY, String.class);
-                IpAddress ip_addr = new IpAddress(ip);
-                boolean coord = doc.get(ISCOORD_KEY, Boolean.class);
-                PingData data = new PingData(addr, true, name, ip_addr).coord(coord);
-                retval.add(data);
+                IpAddress ipAddress = new IpAddress(ip);
+                boolean isCoord = Boolean.TRUE.equals(doc.get(ISCOORD_KEY, Boolean.class));
+                PingData pingData = new PingData(address, true, name, ipAddress).coord(isCoord);
+                retval.add(pingData);
             }
 
             return retval;
@@ -190,27 +191,14 @@ public class MONGO_PING extends JDBC_PING2 {
     }
 
     @Override
-    protected List<PingData> readFromDB(String cluster) throws Exception {
-        try (var mongoClient = getMongoConnection()) {
-            return readFromDB(mongoClient, cluster);
-        }
-    }
-
-    protected void delete(MongoCollection<Document> collection, String clustername, Address addressToDelete) {
-        lock.lock();
-        try {
-            String addr = Util.addressToString(addressToDelete);
-            collection.deleteOne(and(eq("_id", addr), eq(CLUSTERNAME_KEY, clustername)));
-        } finally {
-            lock.unlock();
-        }
+    protected void delete(Connection conn, String clustername, Address addressToDelete) {
+        // Ignore conn - it's null anyway
+        this.delete(clustername, addressToDelete);
     }
 
     @Override
     protected void delete(String clustername, Address addressToDelete) {
-        try (var mongoClient = getMongoConnection()) {
-            var collection = getCollection(mongoClient);
-            delete(collection, clustername, addressToDelete);
-        }
+        String address = Util.addressToString(addressToDelete);
+        getCollection().deleteOne(and(eq("_id", address), eq(CLUSTERNAME_KEY, clustername)));
     }
 }

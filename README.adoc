@@ -24,7 +24,7 @@ This library implements a JGroups discovery protocol which replaces protocols su
 
 [source,xml]
 ----
-<mongo.MONGO_PING connection_url="mongodb://localhost:27017/test"
+<mongo.MONGO_PING connection_url="mongodb://localhost:27017/jgroups"
                   remove_all_data_on_view_change="true"
                   return_entire_cache="false"
 />
@@ -82,13 +82,41 @@ Based on default tcp.xml with discovery replaced with mongo.MONGO_PING.
 </config>
 ----
 
+=== Programmatic Configuration
+
+The protocol can also be configured programmatically:
+
+[source,java]
+----
+JChannel channel = new JChannel(
+        new TCP(),
+        new MONGO_PING()
+                .setConnectionUrl("mongodb://localhost:27017/jgroups")
+                .setCollectionName("my-ping-collection"),
+        new MERGE3(),
+        new FD_SOCK2(),
+        new FD_ALL3(),
+        new VERIFY_SUSPECT2(),
+        new BARRIER(),
+        new NAKACK2(),
+        new UNICAST3(),
+        new STABLE(),
+        new GMS(),
+        new MFC(),
+        new UFC(),
+        new FRAG2(),
+        new STATE_TRANSFER()
+);
+channel.connect("my-cluster");
+----
+
 == Testing
 
 Running the automated tests requires a functioning podman or Docker environment.
 
 [source,shell]
 ----
-./mvnw verify
+./mvnw clean verify
 ----
 
 == Reporting Issues
