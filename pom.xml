@@ -20,9 +20,10 @@
         <maven.compiler.release>17</maven.compiler.release>
         <nexus.staging.tag>${project.groupId}-${project.version}</nexus.staging.tag>
 
+        <!-- n.b. Only use properties for components that can be used to test different runtime versions and their combinations -->
         <!-- https://mvnrepository.com/artifact/org.jgroups/jgroups -->
         <version.org.jgroups>5.5.2.Final</version.org.jgroups>
-        <!-- https://mvnrepository.com/artifact/software.amazon.mongosdk/bom -->
+        <!-- https://mvnrepository.com/artifact/org.mongodb/mongodb-driver-bom -->
         <version.org.mongodb>5.6.3</version.org.mongodb>
     </properties>
 
@@ -76,6 +77,16 @@
 
     <dependencyManagement>
         <dependencies>
+            <!-- Runtime dependencies -->
+            <dependency>
+                <groupId>org.mongodb</groupId>
+                <artifactId>mongodb-driver-bom</artifactId>
+                <version>${version.org.mongodb}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+
+            <!-- Test dependencies -->
             <dependency>
                 <groupId>org.junit</groupId>
                 <artifactId>junit-bom</artifactId>
@@ -87,6 +98,8 @@
     </dependencyManagement>
 
     <dependencies>
+        <!-- Runtime dependencies -->
+
         <!-- JGroups dependencies -->
         <dependency>
             <groupId>org.jgroups</groupId>
@@ -100,13 +113,10 @@
             </exclusions>
         </dependency>
 
-        <!-- MongoDB dependencies -->
-        <!-- n.b. versions are managed by the imported BOM -->
+        <!-- MongoDB dependencies (versions managed by BOM) -->
         <dependency>
             <groupId>org.mongodb</groupId>
             <artifactId>mongodb-driver-sync</artifactId>
-            <version>${version.org.mongodb}</version>
-            <scope>compile</scope>
         </dependency>
 
         <!-- Test dependencies -->
