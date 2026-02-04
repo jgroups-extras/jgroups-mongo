@@ -23,7 +23,7 @@
         <!-- https://mvnrepository.com/artifact/org.jgroups/jgroups -->
         <version.org.jgroups>5.5.2.Final</version.org.jgroups>
         <!-- https://mvnrepository.com/artifact/software.amazon.mongosdk/bom -->
-        <version.org.mongodb>5.6.2</version.org.mongodb>
+        <version.org.mongodb>5.6.3</version.org.mongodb>
     </properties>
 
     <description>Discovery protocol for JGroups using MongoDB as a cluster information store</description>
