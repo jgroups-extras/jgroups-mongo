@@ -1,6 +1,6 @@
-= JGroups Mongo – `mongo.MONGO_PING`
-
 :toc:
+
+= JGroups Mongo – `mongo.MONGO_PING`
 
 WARNING: This is an incubating project.
 
