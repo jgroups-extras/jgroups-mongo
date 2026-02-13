@@ -22,31 +22,29 @@ jobs:
       matrix:
         os:
           - ubuntu-latest
-        # Keep this list as: all supported LTS JDKs, the latest GA JDK, and optionally the latest EA JDK (if available).
-        # Reference: https://adoptium.net/support/
-        java:
-          - 17
-          - 21
-          - 25
 
     steps:
       - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Set up JDK ${{ matrix.java }}
+      - name: Set up JDKs
         uses: actions/setup-java@v5
         with:
           distribution: temurin
-          java-version: ${{ matrix.java }}
+          # Keep this list as: all supported LTS JDKs, the latest GA JDK, and optionally the latest EA JDK (if available).
+          # Reference: https://adoptium.net/support/
+          java-version: |
+            17
+            21
+            25
           cache: maven
 
       - name: Build with Maven
-        run: ./mvnw --batch-mode --no-transfer-progress verify
+        run: ./mvnw --batch-mode --no-transfer-progress verify -Djava17.home=${{env.JAVA_HOME_17_X64}} -Djava21.home=${{env.JAVA_HOME_21_X64}}
 
       - uses: actions/upload-artifact@v6
         if: failure()
         with:
-          name: ${{ matrix.os }}-${{ matrix.java }}-test-reports
+          name: ${{ matrix.os }}-test-reports
           path: |
             **/surefire-reports/*
-            **/failsafe-reports/*
