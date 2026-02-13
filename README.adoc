@@ -110,6 +110,15 @@ JChannel channel = new JChannel(
 channel.connect("my-cluster");
 ----
 
+== Building
+
+This project requires JDK 25 or higher to build.
+
+[source,shell]
+----
+./mvnw clean install
+----
+
 == Testing
 
 Running the automated tests requires a functioning podman or Docker environment.
@@ -117,6 +126,14 @@ Running the automated tests requires a functioning podman or Docker environment.
 [source,shell]
 ----
 ./mvnw clean verify
+----
+
+The project supports running tests with different JDK versions.
+To run tests with a specific JDK as runtime, pass the corresponding `javaXX.home` property:
+
+[source,shell]
+----
+./mvnw clean verify -Djava17.home=/path/to/jdk17 -Djava21.home=/path/to/jdk21
 ----
 
 == Reporting Issues
