@@ -42,7 +42,7 @@ jobs:
       - name: Build with Maven
         run: ./mvnw --batch-mode --no-transfer-progress verify -Djava17.home=${{env.JAVA_HOME_17_X64}} -Djava21.home=${{env.JAVA_HOME_21_X64}}
 
-      - uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@v7
         if: failure()
         with:
           name: ${{ matrix.os }}-test-reports
