@@ -75,6 +75,11 @@
         <url>https://github.com/jgroups-extras/jgroups-mongo/issues</url>
     </issueManagement>
 
+    <ciManagement>
+        <system>GitHub Actions</system>
+        <url>https://github.com/jgroups-extras/jgroups-mongo/actions</url>
+    </ciManagement>
+
     <dependencyManagement>
         <dependencies>
             <!-- Runtime dependencies -->
