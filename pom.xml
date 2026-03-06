@@ -12,7 +12,7 @@
     <artifactId>jgroups-mongo</artifactId>
     <packaging>jar</packaging>
     <name>JGroups - Mongo</name>
-    <version>1.0.0.Beta1</version>
+    <version>1.0.0.Beta2-SNAPSHOT</version>
     <url>https://www.github.com/jgroups-extras/jgroups-mongo</url>
 
     <properties>
@@ -67,7 +67,7 @@
         <connection>scm:git:git://github.com/jgroups-extras/jgroups-mongo.git</connection>
         <developerConnection>scm:git:ssh://git@github.com/jgroups-extras/jgroups-mongo.git</developerConnection>
         <url>https://github.com/jgroups-extras/jgroups-mongo</url>
-        <tag>1.0.0.Beta1</tag>
+        <tag>HEAD</tag>
     </scm>
 
     <issueManagement>
