@@ -5,14 +5,14 @@
         <groupId>org.jboss</groupId>
         <artifactId>jboss-parent</artifactId>
         <version>52</version>
-        <relativePath/>
+        <relativePath />
     </parent>
 
     <groupId>org.jgroups.mongo</groupId>
     <artifactId>jgroups-mongo</artifactId>
     <packaging>jar</packaging>
     <name>JGroups - Mongo</name>
-    <version>1.0.0.Final-SNAPSHOT</version>
+    <version>1.0.0.Beta1</version>
     <url>https://www.github.com/jgroups-extras/jgroups-mongo</url>
 
     <properties>
@@ -67,7 +67,7 @@
         <connection>scm:git:git://github.com/jgroups-extras/jgroups-mongo.git</connection>
         <developerConnection>scm:git:ssh://git@github.com/jgroups-extras/jgroups-mongo.git</developerConnection>
         <url>https://github.com/jgroups-extras/jgroups-mongo</url>
-        <tag>HEAD</tag>
+        <tag>1.0.0.Beta1</tag>
     </scm>
 
     <issueManagement>
