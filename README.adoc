@@ -2,12 +2,16 @@
 
 = JGroups Mongo – `mongo.MONGO_PING`
 
-WARNING: This is an incubating project.
+WARNING: This is an experimental project.
 
 Projects JGroups Mongo provides an implementation of `mongo.MONGO_PING` discovery protocol using MongoDB as a cluster information store.
 It uses the official MongoDB driver for Java.
 
-== Maven Coordinates
+== Installation
+
+=== Maven
+
+For direct usage in JGroups via Maven, use the following coordinates:
 
 [source,xml]
 ----
@@ -18,7 +22,23 @@ It uses the official MongoDB driver for Java.
 </dependency>
 ----
 
-== Protocol Configuration
+which pulls in Mongo driver transitively:
+
+[source]
+----
+org.jgroups.mongo:jgroups-mongo
++- org.jgroups:jgroups
+\- org.mongodb:mongodb-driver-sync
+   +- org.mongodb:bson
+   \- org.mongodb:mongodb-driver-core
+      \- org.mongodb:bson-record-codec
+----
+
+=== WildFly
+
+To provision in WildFly, use the following guide in the https://docs.wildfly.org/40/High_Availability_Guide.html#external-protocols[High Availability Guide → External Protocols].
+
+== Configuration
 
 This library implements a JGroups discovery protocol which replaces protocols such as `MPING` or `TCPPING`.
 
