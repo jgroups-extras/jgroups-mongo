@@ -86,8 +86,14 @@ public class MONGO_PING extends JDBC_PING2 {
             throw new IllegalStateException("Database name must be specified in connection_url");
         }
         mongoClient = MongoClients.create(connectionString);
-        collection = mongoClient.getDatabase(connectionString.getDatabase()).getCollection(collection_name);
-        super.init();
+        try {
+            collection = mongoClient.getDatabase(connectionString.getDatabase()).getCollection(collection_name);
+            super.init();
+        } catch (Throwable t) {
+            // Close the client right away instead of relying on the stack calling destroy()
+            closeClient();
+            throw t;
+        }
     }
 
     protected MongoCollection<Document> getCollection() {
@@ -100,8 +106,14 @@ public class MONGO_PING extends JDBC_PING2 {
      */
     @Override
     public void destroy() {
-        super.destroy();
+        try {
+            super.destroy();
+        } finally {
+            closeClient();
+        }
+    }
 
+    private void closeClient() {
         // Don't keep handing out a collection of the closed client
         collection = null;
         if (mongoClient != null) {
