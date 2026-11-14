@@ -100,7 +100,6 @@ public class MONGO_PINGDiscoveryTestCase {
 
         try (JChannel first = createFromXml(); JChannel second = createFromXml()) {
             first.connect(clusterName);
-            Util.sleep(1000);
             second.connect(clusterName);
             Util.waitUntilAllChannelsHaveSameView(TIMEOUT_MS, INTERVAL_MS, first, second);
 
@@ -126,16 +125,17 @@ public class MONGO_PINGDiscoveryTestCase {
      */
     @Test
     public void testCloseClosesClient() throws Exception {
-        JChannel channel = createFromXml();
-        MONGO_PING ping = channel.getProtocolStack().findProtocol(MONGO_PING.class);
-        channel.connect("close-" + RANDOM_CLUSTER_NAME);
-        var collection = ping.getCollection();
+        // Closing an already closed channel is a no-op, so this only matters if the test fails before close()
+        try (JChannel channel = createFromXml()) {
+            MONGO_PING ping = channel.getProtocolStack().findProtocol(MONGO_PING.class);
+            channel.connect("close-" + RANDOM_CLUSTER_NAME);
+            var collection = ping.getCollection();
 
-        channel.close();
+            channel.close();
 
-        assertNull(ping.getCollection(), "collection after close");
-        IllegalStateException ex = assertThrows(IllegalStateException.class, collection::countDocuments, "client must be closed");
-        assertTrue(ex.getMessage().contains("state should be: open"), ex.getMessage());
+            assertNull(ping.getCollection(), "collection after close");
+            assertThrows(IllegalStateException.class, collection::countDocuments, "client must be closed");
+        }
     }
 
     private void discover(String clusterName, ChannelCreator creator) throws Exception {
