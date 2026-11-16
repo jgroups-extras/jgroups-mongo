@@ -3,7 +3,7 @@ module org.jgroups.mongo {
     requires org.jgroups;
     requires org.mongodb.bson;
     requires org.mongodb.driver.core;
-    requires org.mongodb.driver.sync.client;
+    requires transitive org.mongodb.driver.sync.client; // MongoDatabase is used in the public API
 
     exports org.jgroups.protocols.mongo;
 
