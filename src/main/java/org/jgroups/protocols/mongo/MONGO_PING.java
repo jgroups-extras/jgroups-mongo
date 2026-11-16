@@ -6,13 +6,17 @@ import static com.mongodb.client.model.Filters.eq;
 import java.sql.Connection;
 import java.util.LinkedList;
 import java.util.List;
+import java.util.Objects;
 
 import com.mongodb.ConnectionString;
+import com.mongodb.MongoClientSettings;
 import com.mongodb.MongoCommandException;
+import com.mongodb.ReadPreference;
 import com.mongodb.client.MongoClient;
 import com.mongodb.client.model.ReplaceOptions;
 import com.mongodb.client.MongoClients;
 import com.mongodb.client.MongoCollection;
+import com.mongodb.client.MongoDatabase;
 import org.bson.Document;
 import org.jgroups.Address;
 import org.jgroups.PhysicalAddress;
@@ -37,6 +41,11 @@ import org.jgroups.util.Util;
  * }</pre>
  * <p>
  * The connection URL must include the database name (e.g., {@code mongodb://host:port/database}).
+ * <p>
+ * By default the protocol creates its own {@link MongoClient} from the connection URL. An application that already has
+ * a client (e.g., one managed by Spring) can share it by passing one of its databases to
+ * {@link #setMongoDatabase(MongoDatabase)} before the channel is connected; the connection URL is then optional and not
+ * used, and the shared client is never closed by this protocol.
  *
  * @author rsobies
  * @author Radoslav Husar
@@ -76,24 +85,83 @@ public class MONGO_PING extends JDBC_PING2 {
         return this;
     }
 
+    // Database of a client shared by the application, set via setMongoDatabase()
+    private MongoDatabase sharedDatabase;
+    // Client created by this protocol, null when using a shared database; closed by this protocol
     private MongoClient mongoClient;
     private MongoCollection<Document> collection;
 
+    /**
+     * Uses a database of a client shared by the application instead of creating a client from {@code connection_url},
+     * which is then optional and not used. Must be called after the channel is created and before it is first
+     * connected; a disconnected channel keeps using the same database when reconnected. The shared client is never
+     * closed by this protocol; its owner closes it after the channel.
+     * <p>
+     * The read preference is always primary and the default codec registry is used, regardless of the database's
+     * settings; other settings (e.g., write concern) are inherited from the database.
+     *
+     * @throws IllegalStateException if the channel has already been connected (even if since disconnected)
+     */
+    public MONGO_PING setMongoDatabase(MongoDatabase database) {
+        Objects.requireNonNull(database, "database");
+        if (collection != null) {
+            throw new IllegalStateException("MongoDB database must be set before the channel is connected");
+        }
+        this.sharedDatabase = database;
+        return this;
+    }
+
+    /**
+     * Only validates {@code connection_url} if it is set, to fail early. No client is created here: JChannel calls
+     * init() from its constructor, before an application could call {@link #setMongoDatabase(MongoDatabase)}.
+     */
     @Override
     public void init() throws Exception {
+        if (connection_url != null) {
+            parseConnectionUrl();
+        }
+        super.init();
+    }
+
+    private ConnectionString parseConnectionUrl() {
         var connectionString = new ConnectionString(connection_url);
         if (connectionString.getDatabase() == null) {
             throw new IllegalStateException("Database name must be specified in connection_url");
         }
-        mongoClient = MongoClients.create(connectionString);
-        try {
-            collection = mongoClient.getDatabase(connectionString.getDatabase()).getCollection(collection_name);
-            super.init();
-        } catch (Throwable t) {
-            // Close the client right away instead of relying on the stack calling destroy()
-            closeClient();
-            throw t;
+        return connectionString;
+    }
+
+    /**
+     * Resolves the collection on the first start, from the shared database or from a client created by this protocol.
+     * Disconnecting and reconnecting a channel calls stop() and start() again, and keeps using the same collection.
+     */
+    @Override
+    public void start() throws Exception {
+        if (collection == null) {
+            MongoDatabase database = sharedDatabase;
+            if (database == null) {
+                if (connection_url == null) {
+                    throw new IllegalStateException("Either connection_url or a shared MongoDB database must be set");
+                }
+                // Parsed here rather than in init(), so that a connection_url set after the channel was created is used
+                var connectionString = parseConnectionUrl();
+                mongoClient = MongoClients.create(connectionString);
+                database = mongoClient.getDatabase(connectionString.getDatabase());
+            }
+            try {
+                createCollection(database);
+                collection = database.getCollection(collection_name)
+                        // Don't inherit settings of a shared client that would break discovery: reads from secondaries
+                        // can be stale, and a custom codec registry might not be able to encode Documents
+                        .withReadPreference(ReadPreference.primary())
+                        .withCodecRegistry(MongoClientSettings.getDefaultCodecRegistry());
+            } catch (Throwable t) {
+                // Close the own client right away instead of relying on the stack calling destroy()
+                closeClient();
+                throw t;
+            }
         }
+        super.start();
     }
 
     protected MongoCollection<Document> getCollection() {
@@ -101,8 +169,19 @@ public class MONGO_PING extends JDBC_PING2 {
     }
 
     /**
+     * Returns the collection, which only exists between the first connect and the close of the channel.
+     */
+    private MongoCollection<Document> requireCollection() {
+        var collection = getCollection();
+        if (collection == null) {
+            throw new IllegalStateException("MongoDB collection is not available: the channel has not been connected yet or is closed");
+        }
+        return collection;
+    }
+
+    /**
      * Closes the client in destroy() rather than stop(): disconnecting and reconnecting a channel calls stop() and
-     * start() without init() and destroy(), and JDBC_PING2.stop() still uses the client to remove the local entry.
+     * start() without init() and destroy(), and FILE_PING.stop() still uses the client to remove the local entry.
      */
     @Override
     public void destroy() {
@@ -113,8 +192,11 @@ public class MONGO_PING extends JDBC_PING2 {
         }
     }
 
+    /**
+     * Closes the client only if this protocol created it; a shared client stays open. Either way the collection is
+     * dropped, so that a closed client is not handed out and a shared one is not kept reachable.
+     */
     private void closeClient() {
-        // Don't keep handing out a collection of the closed client
         collection = null;
         if (mongoClient != null) {
             mongoClient.close();
@@ -136,7 +218,7 @@ public class MONGO_PING extends JDBC_PING2 {
 
     @Override
     protected void clearTable(String clustername) {
-        getCollection().deleteMany(eq(CLUSTERNAME_KEY, clustername));
+        requireCollection().deleteMany(eq(CLUSTERNAME_KEY, clustername));
     }
 
     /**
@@ -163,14 +245,20 @@ public class MONGO_PING extends JDBC_PING2 {
                 .append(CLUSTERNAME_KEY, clustername)
                 .append(IP_KEY, ip)
                 .append(ISCOORD_KEY, data.isCoord());
-        getCollection().replaceOne(filter, document, new ReplaceOptions().upsert(true));
+        requireCollection().replaceOne(filter, document, new ReplaceOptions().upsert(true));
     }
 
+    /**
+     * Called by JDBC_PING2.init(), before a shared database can be set; the collection is created in {@link #start()}.
+     */
     @Override
     protected void createSchema() {
+        // No-op.
+    }
+
+    private void createCollection(MongoDatabase database) {
         try {
-            var db = mongoClient.getDatabase(collection.getNamespace().getDatabaseName());
-            db.createCollection(collection_name);
+            database.createCollection(collection_name);
         } catch (MongoCommandException mex) {
             // Ignore "collection already exists" error (code 48)
             if (mex.getErrorCode() != 48) {
@@ -181,7 +269,7 @@ public class MONGO_PING extends JDBC_PING2 {
 
     @Override
     protected List<PingData> readFromDB(String cluster) throws Exception {
-        try (var iterator = getCollection().find(eq(CLUSTERNAME_KEY, cluster)).iterator()) {
+        try (var iterator = requireCollection().find(eq(CLUSTERNAME_KEY, cluster)).iterator()) {
             // Lock only for the shared counter to work around its non-volatility
             lock.lock();
             try {
@@ -213,9 +301,28 @@ public class MONGO_PING extends JDBC_PING2 {
         this.delete(clustername, addressToDelete);
     }
 
+    /**
+     * The parent only handles SQLException, while the MongoDB driver throws unchecked exceptions. Log them instead, so
+     * that a failed removal (e.g., MongoDB is not reachable, or a shared client was already closed by its owner) aborts
+     * neither the stack shutdown in FILE_PING.stop() nor the handling of a view change.
+     */
+    @Override
+    protected void remove(String clustername, Address addr) {
+        try {
+            delete(clustername, addr);
+        } catch (RuntimeException e) {
+            log.error(String.format("%s: failed deleting %s from the collection", local_addr, addr), e);
+        }
+    }
+
     @Override
     protected void delete(String clustername, Address addressToDelete) {
+        var collection = getCollection();
+        if (collection == null) {
+            // start() failed, so the local entry was never written; FILE_PING.stop() still tries to remove it
+            return;
+        }
         String address = Util.addressToString(addressToDelete);
-        getCollection().deleteOne(and(eq("_id", address), eq(CLUSTERNAME_KEY, clustername)));
+        collection.deleteOne(and(eq("_id", address), eq(CLUSTERNAME_KEY, clustername)));
     }
 }

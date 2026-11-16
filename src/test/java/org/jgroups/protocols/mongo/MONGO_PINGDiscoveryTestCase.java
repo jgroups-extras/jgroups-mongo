@@ -8,6 +8,12 @@ import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 
+import com.mongodb.ReadPreference;
+import com.mongodb.client.MongoClient;
+import com.mongodb.client.MongoClients;
+import org.bson.Document;
+import org.bson.codecs.StringCodec;
+import org.bson.codecs.configuration.CodecRegistries;
 import org.jgroups.JChannel;
 import org.jgroups.protocols.*;
 import org.jgroups.protocols.pbcast.GMS;
@@ -138,6 +144,172 @@ public class MONGO_PINGDiscoveryTestCase {
         }
     }
 
+    @Test
+    public void testDiscoveryWithSharedDatabase() throws Exception {
+        try (MongoClient sharedClient = MongoClients.create(mongoDBContainer.getConnectionString())) {
+            discover("shared-" + RANDOM_CLUSTER_NAME, () -> createWithSharedDatabase(sharedClient));
+
+            // Closed channels must not have closed the shared client
+            assertDoesNotThrow(() -> sharedClient.getDatabase("jgroups").runCommand(new Document("ping", 1)));
+        }
+    }
+
+    /**
+     * connection_url is optional when a shared database is set.
+     */
+    @Test
+    public void testDiscoveryWithSharedDatabaseWithoutConnectionUrl() throws Exception {
+        try (MongoClient sharedClient = MongoClients.create(mongoDBContainer.getConnectionString())) {
+            discover("shared-no-url-" + RANDOM_CLUSTER_NAME, () -> {
+                JChannel channel = createProgrammatically(null);
+                MONGO_PING ping = channel.getProtocolStack().findProtocol(MONGO_PING.class);
+                ping.setMongoDatabase(sharedClient.getDatabase("jgroups"));
+                return channel;
+            });
+        }
+    }
+
+    /**
+     * Reads from secondaries could be stale, so the read preference of the shared database must not be inherited.
+     */
+    @Test
+    public void testSharedDatabaseReadPreferenceIsNotInherited() throws Exception {
+        try (MongoClient sharedClient = MongoClients.create(mongoDBContainer.getConnectionString());
+             JChannel channel = createFromXml()) {
+            MONGO_PING ping = channel.getProtocolStack().findProtocol(MONGO_PING.class);
+            ping.setMongoDatabase(sharedClient.getDatabase("jgroups").withReadPreference(ReadPreference.secondaryPreferred()));
+            channel.connect("read-preference-" + RANDOM_CLUSTER_NAME);
+
+            assertEquals(ReadPreference.primary(), ping.getCollection().getReadPreference());
+        }
+    }
+
+    @Test
+    public void testSetMongoDatabaseAfterConnectIsRejected() throws Exception {
+        try (JChannel channel = createFromXml();
+             MongoClient sharedClient = MongoClients.create(mongoDBContainer.getConnectionString())) {
+            MONGO_PING ping = channel.getProtocolStack().findProtocol(MONGO_PING.class);
+            channel.connect("late-database-" + RANDOM_CLUSTER_NAME);
+
+            assertThrows(IllegalStateException.class, () -> ping.setMongoDatabase(sharedClient.getDatabase("jgroups")));
+
+            // A disconnected channel keeps its collection for the next connect, so the database still cannot be replaced
+            channel.disconnect();
+            assertThrows(IllegalStateException.class, () -> ping.setMongoDatabase(sharedClient.getDatabase("jgroups")));
+        }
+    }
+
+    /**
+     * A custom codec registry might not be able to encode Documents, so the one of the shared database must not be inherited.
+     */
+    @Test
+    public void testSharedDatabaseCodecRegistryIsNotInherited() throws Exception {
+        try (MongoClient sharedClient = MongoClients.create(mongoDBContainer.getConnectionString());
+             JChannel channel = createFromXml()) {
+            MONGO_PING ping = channel.getProtocolStack().findProtocol(MONGO_PING.class);
+            // A registry that cannot encode Documents
+            ping.setMongoDatabase(sharedClient.getDatabase("jgroups").withCodecRegistry(CodecRegistries.fromCodecs(new StringCodec())));
+            channel.connect("codec-registry-" + RANDOM_CLUSTER_NAME);
+
+            // The driver wraps the registry, so check what it can do rather than compare it to the default one
+            assertDoesNotThrow(() -> ping.getCollection().getCodecRegistry().get(Document.class));
+            // The local member's entry was written and can be read
+            assertEquals(1, ping.readFromDB(channel.getClusterName()).size(), "entries");
+        }
+    }
+
+    /**
+     * Disconnecting and reconnecting must keep using the shared database, and neither must close the shared client.
+     */
+    @Test
+    public void testDisconnectAndReconnectWithSharedDatabase() throws Exception {
+        String clusterName = "shared-reconnect-" + RANDOM_CLUSTER_NAME;
+
+        try (MongoClient sharedClient = MongoClients.create(mongoDBContainer.getConnectionString())) {
+            try (JChannel channel = createWithSharedDatabase(sharedClient)) {
+                MONGO_PING ping = channel.getProtocolStack().findProtocol(MONGO_PING.class);
+                channel.connect(clusterName);
+                var collection = ping.getCollection();
+
+                channel.disconnect();
+                channel.connect(clusterName);
+
+                assertSame(collection, ping.getCollection(), "collection after reconnect");
+                assertEquals(1, ping.readFromDB(clusterName).size(), "entries");
+            }
+
+            assertDoesNotThrow(() -> sharedClient.getDatabase("jgroups").runCommand(new Document("ping", 1)));
+        }
+    }
+
+    /**
+     * connection_url is only needed on connect, so it can still be set after the channel was created.
+     */
+    @Test
+    public void testConnectionUrlSetAfterChannelCreation() throws Exception {
+        try (JChannel channel = createProgrammatically(null)) {
+            MONGO_PING ping = channel.getProtocolStack().findProtocol(MONGO_PING.class);
+            ping.setConnectionUrl(mongoDBContainer.getConnectionString() + "/jgroups");
+
+            channel.connect("late-url-" + RANDOM_CLUSTER_NAME);
+
+            assertNotNull(ping.getCollection(), "collection after connect");
+        }
+    }
+
+    /**
+     * The owner of a shared client might close it before the channel (e.g., from a JVM shutdown hook); removing the
+     * local entry must then not throw, as that would abort the shutdown of the protocol stack.
+     */
+    @Test
+    public void testRemoveWithClosedSharedClient() throws Exception {
+        MongoClient sharedClient = MongoClients.create(mongoDBContainer.getConnectionString());
+        try (sharedClient; JChannel channel = createWithSharedDatabase(sharedClient)) {
+            MONGO_PING ping = channel.getProtocolStack().findProtocol(MONGO_PING.class);
+            String clusterName = "closed-shared-client-" + RANDOM_CLUSTER_NAME;
+            channel.connect(clusterName);
+
+            sharedClient.close();
+
+            assertDoesNotThrow(() -> ping.remove(clusterName, channel.getAddress()));
+        }
+    }
+
+    /**
+     * The collection only exists once the channel is connected; operations before that fail with a descriptive error.
+     */
+    @Test
+    public void testDumpBeforeConnectIsRejected() throws Exception {
+        try (JChannel channel = createFromXml()) {
+            MONGO_PING ping = channel.getProtocolStack().findProtocol(MONGO_PING.class);
+
+            assertThrows(IllegalStateException.class, () -> ping.dump("not-connected-" + RANDOM_CLUSTER_NAME));
+        }
+    }
+
+    /**
+     * The own client is created in start(), so that a shared database can be set on a channel created from XML
+     * (JChannel calls init() from its constructor).
+     */
+    @Test
+    public void testCollectionIsResolvedOnConnect() throws Exception {
+        try (JChannel channel = createFromXml()) {
+            MONGO_PING ping = channel.getProtocolStack().findProtocol(MONGO_PING.class);
+            assertNull(ping.getCollection(), "collection before connect");
+
+            channel.connect("resolve-on-connect-" + RANDOM_CLUSTER_NAME);
+
+            assertNotNull(ping.getCollection(), "collection after connect");
+        }
+    }
+
+    @Test
+    public void testConnectWithoutConnectionUrlOrSharedDatabaseIsRejected() throws Exception {
+        try (JChannel channel = createProgrammatically(null)) {
+            assertThrows(IllegalStateException.class, () -> channel.connect("no-database-" + RANDOM_CLUSTER_NAME));
+        }
+    }
+
     private void discover(String clusterName, ChannelCreator creator) throws Exception {
         List<JChannel> channels = new LinkedList<>();
 
@@ -171,13 +343,24 @@ public class MONGO_PINGDiscoveryTestCase {
         return new JChannel("org/jgroups/protocols/mongo/tcp-MONGO_PING.xml");
     }
 
+    private JChannel createWithSharedDatabase(MongoClient sharedClient) throws Exception {
+        JChannel channel = createFromXml();
+        MONGO_PING ping = channel.getProtocolStack().findProtocol(MONGO_PING.class);
+        ping.setMongoDatabase(sharedClient.getDatabase("jgroups"));
+        return channel;
+    }
+
     private JChannel createProgrammatically() throws Exception {
+        return createProgrammatically(mongoDBContainer.getConnectionString() + "/jgroups");
+    }
+
+    private JChannel createProgrammatically(String connectionUrl) throws Exception {
         String customCollectionName = "custom-ping-collection";
 
         var channel = new JChannel(
                 new TCP(),
                 new MONGO_PING()
-                        .setConnectionUrl(mongoDBContainer.getConnectionString() + "/jgroups")
+                        .setConnectionUrl(connectionUrl)
                         .setCollectionName(customCollectionName),
                 new MERGE3(),
                 new FD_SOCK2(),
