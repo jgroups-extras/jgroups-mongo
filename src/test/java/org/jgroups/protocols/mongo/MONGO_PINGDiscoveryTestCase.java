@@ -8,9 +8,12 @@ import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 
+import com.mongodb.ReadPreference;
 import com.mongodb.client.MongoClient;
 import com.mongodb.client.MongoClients;
 import org.bson.Document;
+import org.bson.codecs.StringCodec;
+import org.bson.codecs.configuration.CodecRegistries;
 import org.jgroups.JChannel;
 import org.jgroups.protocols.*;
 import org.jgroups.protocols.pbcast.GMS;
@@ -166,6 +169,21 @@ public class MONGO_PINGDiscoveryTestCase {
         }
     }
 
+    /**
+     * Reads from secondaries could be stale, so the read preference of the shared database must not be inherited.
+     */
+    @Test
+    public void testSharedDatabaseReadPreferenceIsNotInherited() throws Exception {
+        try (MongoClient sharedClient = MongoClients.create(mongoDBContainer.getConnectionString());
+             JChannel channel = createFromXml()) {
+            MONGO_PING ping = channel.getProtocolStack().findProtocol(MONGO_PING.class);
+            ping.setMongoDatabase(sharedClient.getDatabase("jgroups").withReadPreference(ReadPreference.secondaryPreferred()));
+            channel.connect("read-preference-" + RANDOM_CLUSTER_NAME);
+
+            assertEquals(ReadPreference.primary(), ping.getCollection().getReadPreference());
+        }
+    }
+
     @Test
     public void testSetMongoDatabaseAfterConnectIsRejected() throws Exception {
         try (JChannel channel = createFromXml();
@@ -174,6 +192,29 @@ public class MONGO_PINGDiscoveryTestCase {
             channel.connect("late-database-" + RANDOM_CLUSTER_NAME);
 
             assertThrows(IllegalStateException.class, () -> ping.setMongoDatabase(sharedClient.getDatabase("jgroups")));
+
+            // A disconnected channel keeps its collection for the next connect, so the database still cannot be replaced
+            channel.disconnect();
+            assertThrows(IllegalStateException.class, () -> ping.setMongoDatabase(sharedClient.getDatabase("jgroups")));
+        }
+    }
+
+    /**
+     * A custom codec registry might not be able to encode Documents, so the one of the shared database must not be inherited.
+     */
+    @Test
+    public void testSharedDatabaseCodecRegistryIsNotInherited() throws Exception {
+        try (MongoClient sharedClient = MongoClients.create(mongoDBContainer.getConnectionString());
+             JChannel channel = createFromXml()) {
+            MONGO_PING ping = channel.getProtocolStack().findProtocol(MONGO_PING.class);
+            // A registry that cannot encode Documents
+            ping.setMongoDatabase(sharedClient.getDatabase("jgroups").withCodecRegistry(CodecRegistries.fromCodecs(new StringCodec())));
+            channel.connect("codec-registry-" + RANDOM_CLUSTER_NAME);
+
+            // The driver wraps the registry, so check what it can do rather than compare it to the default one
+            assertDoesNotThrow(() -> ping.getCollection().getCodecRegistry().get(Document.class));
+            // The local member's entry was written and can be read
+            assertEquals(1, ping.readFromDB(channel.getClusterName()).size(), "entries");
         }
     }
 

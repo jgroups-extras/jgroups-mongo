@@ -147,10 +147,12 @@ channel.connect("my-cluster");
 ----
 
 * `connection_url` is optional and not used when a database is set.
+* The protocol always reads from the primary and uses the default codec registry, regardless of the database's settings; other settings (e.g., write concern) are inherited.
+  Do not pass a database with an unacknowledged write concern (`w=0`), as members could then miss each other's entries.
 * A shared client is never closed by the protocol. Close it after the channel: the protocol removes the local member's entry when the channel is disconnected or closed.
   If the client is closed first (e.g., both are only closed by JVM shutdown hooks, which run in no particular order), the removal fails with a logged error and the stale entry stays until it is removed on a later view change (see `remove_all_data_on_view_change`).
 * The client (own or shared) is first used when the channel is connected, so an unreachable MongoDB or missing privileges fail `connect()`, not the creation of the channel.
-* Setting a database after the channel was connected throws `IllegalStateException`.
+* Setting a database after the channel was connected (even if since disconnected) throws `IllegalStateException`.
 
 == Building
 

@@ -9,7 +9,9 @@ import java.util.List;
 import java.util.Objects;
 
 import com.mongodb.ConnectionString;
+import com.mongodb.MongoClientSettings;
 import com.mongodb.MongoCommandException;
+import com.mongodb.ReadPreference;
 import com.mongodb.client.MongoClient;
 import com.mongodb.client.model.ReplaceOptions;
 import com.mongodb.client.MongoClients;
@@ -91,10 +93,14 @@ public class MONGO_PING extends JDBC_PING2 {
 
     /**
      * Uses a database of a client shared by the application instead of creating a client from {@code connection_url},
-     * which is then optional and not used. Must be called after the channel is created and before it is connected.
-     * The shared client is never closed by this protocol; its owner closes it after the channel.
+     * which is then optional and not used. Must be called after the channel is created and before it is first
+     * connected; a disconnected channel keeps using the same database when reconnected. The shared client is never
+     * closed by this protocol; its owner closes it after the channel.
+     * <p>
+     * The read preference is always primary and the default codec registry is used, regardless of the database's
+     * settings; other settings (e.g., write concern) are inherited from the database.
      *
-     * @throws IllegalStateException if the channel has already been connected
+     * @throws IllegalStateException if the channel has already been connected (even if since disconnected)
      */
     public MONGO_PING setMongoDatabase(MongoDatabase database) {
         Objects.requireNonNull(database, "database");
@@ -144,7 +150,11 @@ public class MONGO_PING extends JDBC_PING2 {
             }
             try {
                 createCollection(database);
-                collection = database.getCollection(collection_name);
+                collection = database.getCollection(collection_name)
+                        // Don't inherit settings of a shared client that would break discovery: reads from secondaries
+                        // can be stale, and a custom codec registry might not be able to encode Documents
+                        .withReadPreference(ReadPreference.primary())
+                        .withCodecRegistry(MongoClientSettings.getDefaultCodecRegistry());
             } catch (Throwable t) {
                 // Close the own client right away instead of relying on the stack calling destroy()
                 closeClient();
