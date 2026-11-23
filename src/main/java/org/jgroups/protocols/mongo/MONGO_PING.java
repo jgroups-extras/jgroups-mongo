@@ -4,11 +4,13 @@ import static com.mongodb.client.model.Filters.and;
 import static com.mongodb.client.model.Filters.eq;
 
 import java.sql.Connection;
+import java.sql.SQLException;
 import java.util.LinkedList;
 import java.util.List;
 
 import com.mongodb.ConnectionString;
 import com.mongodb.MongoCommandException;
+import com.mongodb.MongoException;
 import com.mongodb.client.MongoClient;
 import com.mongodb.client.model.ReplaceOptions;
 import com.mongodb.client.MongoClients;
@@ -149,8 +151,13 @@ public class MONGO_PING extends JDBC_PING2 {
         return null;
     }
 
+    /**
+     * The MongoDB driver throws unchecked exceptions, while the parent only handles SQLException when writing. Rethrow
+     * them as such, so that a failed write (e.g., MongoDB is not reachable) is logged by the parent instead of
+     * propagating up the stack.
+     */
     @Override
-    protected void writeToDB(PingData data, String clustername) {
+    protected void writeToDB(PingData data, String clustername) throws SQLException {
         Address address = data.getAddress();
         String addr = Util.addressToString(address);
         String name = address instanceof SiteUUID ? ((SiteUUID) address).getName() : NameCache.get(address);
@@ -163,7 +170,11 @@ public class MONGO_PING extends JDBC_PING2 {
                 .append(CLUSTERNAME_KEY, clustername)
                 .append(IP_KEY, ip)
                 .append(ISCOORD_KEY, data.isCoord());
-        getCollection().replaceOne(filter, document, new ReplaceOptions().upsert(true));
+        try {
+            getCollection().replaceOne(filter, document, new ReplaceOptions().upsert(true));
+        } catch (MongoException e) {
+            throw new SQLException(e);
+        }
     }
 
     @Override
@@ -208,14 +219,22 @@ public class MONGO_PING extends JDBC_PING2 {
     }
 
     @Override
-    protected void delete(Connection conn, String clustername, Address addressToDelete) {
+    protected void delete(Connection conn, String clustername, Address addressToDelete) throws SQLException {
         // Ignore conn - it's null anyway
         this.delete(clustername, addressToDelete);
     }
 
+    /**
+     * Rethrows unchecked exceptions of the MongoDB driver as SQLException, which is the only one the parent handles
+     * when removing; see {@link #writeToDB(PingData, String)}.
+     */
     @Override
-    protected void delete(String clustername, Address addressToDelete) {
+    protected void delete(String clustername, Address addressToDelete) throws SQLException {
         String address = Util.addressToString(addressToDelete);
-        getCollection().deleteOne(and(eq("_id", address), eq(CLUSTERNAME_KEY, clustername)));
+        try {
+            getCollection().deleteOne(and(eq("_id", address), eq(CLUSTERNAME_KEY, clustername)));
+        } catch (MongoException e) {
+            throw new SQLException(e);
+        }
     }
 }
